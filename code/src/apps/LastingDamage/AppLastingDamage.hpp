@@ -34,6 +34,8 @@ SOFTWARE.
 #include "common/core/App.hpp"
 #include "common/core/Hardware.hpp"
 #include "common/core/Kastle2.hpp"
+#include "common/dsp/filters/DjFilter.hpp"
+#include "common/dsp/math/math_utils.hpp"
 #include "common/dsp/math/qmath.hpp"
 #include "common/dsp/utility/EdgeDetector.hpp"
 #include "common/fastcode.hpp"
@@ -58,6 +60,10 @@ namespace kastle2
  * - FEEDBACK: wear. Fully left the loop repeats forever, unchanged.
  * - FEEDBACK MOD: how much the FEEDBACK CV moves the wear.
  * - AMOUNT: dry/wet. SHIFT + AMOUNT: how much the AMOUNT CV moves it.
+ * - SHIFT + FEEDBACK (FILTER): Bastl's DJ filter on the loop, lowpass to the
+ *   left, highpass to the right, off in the middle.
+ * - SHIFT + FEEDBACK MOD (STEREO): the right channel read by a second head
+ *   up to 150 ms behind the first.
  */
 class AppLastingDamage : public virtual App
 {
@@ -92,6 +98,14 @@ private:
     static constexpr uint32_t kHoldMax = s2alr(3.0f);
     // How long the LEDs flash bright at the start of each pass.
     static constexpr uint32_t kPassFlash = s2alr(0.05f);
+    // STEREO: the right head's offset at full turn, 150 ms. Squared, so the
+    // first half of the knob is the few-ms widening range.
+    static constexpr uint32_t kMaxSpreadFrames = 6600;
+    // FILTER: FX Wizard's own curve for its DJ filter (AppFxWizard,
+    // kMapDjFilter): lowpass to the left, a flat spot in the middle.
+    static constexpr auto kMapFilter = MapDef<int32_t, 4>{
+        {pot(0.0f), pot(0.49f), pot(0.51f), pot(1.0f)},
+        {q15(-0.8f), q15(0.0f), q15(0.0f), q15(0.9f)}};
 
     enum class Pot
     {
@@ -101,6 +115,8 @@ private:
         FEEDBACK_MOD,
         AMOUNT,
         AMOUNT_MOD,
+        FILTER,
+        STEREO,
         COUNT
     };
 
@@ -108,12 +124,15 @@ private:
     lasting_damage::TapeLoop tape_;
     EnumArray<Pot, std::unique_ptr<FancyPot>> pots_;
     EdgeDetector trigger_detect_ = EdgeDetector(EdgeDetector::Type::RISING);
+    DjFilter filter_left_;
+    DjFilter filter_right_;
 
     // Written by UiLoop, read by AudioLoop. Plain 32-bit values, which the
     // M0+ reads and writes in one go, so no locking is needed.
     volatile int32_t speed_q15_ = lasting_damage::TapeLoop::kUnity;
     volatile int32_t wear_q15_ = 0;
     volatile int32_t amount_q15_ = Q15_MAX;
+    volatile uint32_t spread_frames_ = 0;
     volatile bool toggle_request_ = false;
 
     // Audio-side state shown on the LEDs.

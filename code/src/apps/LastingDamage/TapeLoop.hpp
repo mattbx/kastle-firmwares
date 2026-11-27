@@ -77,6 +77,7 @@ public:
     static constexpr int32_t kUnity = 1 << 15;      ///< 1.0 in Q15.
     static constexpr int32_t kMaxSpeed = 4 * kUnity; ///< 4x either way.
     static constexpr uint32_t kMaxFrames = 65535;    ///< Phase format limit.
+    static constexpr uint32_t kMaxSpread = 8192;     ///< Right head offset limit, frames.
 
     /**
      * @param buffer Interleaved stereo frames (L, R, L, R...), owned by the host.
@@ -106,6 +107,8 @@ public:
         loop_mix_ = 0;
         speed_target_ = kUnity;
         speed_smooth_ = kUnity << 8;
+        spread_target_ = 0;
+        spread_smooth_ = 0;
         SetWear(0);
         flake_left_ = 0;
         reset_prev_ = true;
@@ -155,6 +158,31 @@ public:
     {
         SetSpeed(speed_q15);
         speed_smooth_ = speed_target_ << 8;
+    }
+
+    /**
+     * Stereo spread: the right channel is read by a second head this many
+     * frames behind the first, so the loop plays against a slightly later
+     * copy of itself (a few ms widens it, tens of ms is a short echo). Moving
+     * it glides over about 50 ms, like sliding a head along the tape, so the
+     * right channel bends in pitch while it moves instead of clicking. 0 is
+     * one head, exactly as before. Costs no extra memory: both heads read the
+     * same tape.
+     */
+    void SetSpread(uint32_t frames)
+    {
+        if (frames > kMaxSpread)
+        {
+            frames = kMaxSpread;
+        }
+        spread_target_ = static_cast<int32_t>(frames) << 15; // phase units
+    }
+
+    /// Jump straight to a spread, skipping the glide (tests).
+    void ForceSpread(uint32_t frames)
+    {
+        SetSpread(frames);
+        spread_smooth_ = spread_target_;
     }
 
     /**
@@ -348,6 +376,31 @@ private:
         *l = a[0] + (((b[0] - a[0]) * frac) >> 15);
         *r = a[1] + (((b[1] - a[1]) * frac) >> 15);
 
+        // Right channel from the second head, spread_ behind. The glide is a
+        // one-pole on the offset (about 50 ms). The difference is at most
+        // kMaxSpread << 15 = 2^28, so the sum stays in 32 bits.
+        spread_smooth_ += (spread_target_ - spread_smooth_) >> 11;
+        if (spread_smooth_ != 0)
+        {
+            const int32_t lenq0 = static_cast<int32_t>(len_) << 15;
+            int32_t off = spread_smooth_;
+            while (off >= lenq0)
+            {
+                off -= lenq0; // spread longer than the loop: wrap around
+            }
+            int32_t rp = phase_ - off;
+            if (rp < 0)
+            {
+                rp += lenq0;
+            }
+            int32_t ridx = rp >> 15;
+            int32_t rfrac = rp & 0x7FFF;
+            int32_t rnxt = ridx + 1 >= static_cast<int32_t>(len_) ? 0 : ridx + 1;
+            int32_t ra = buf_[2 * ridx + 1];
+            int32_t rb = buf_[2 * rnxt + 1];
+            *r = ra + (((rb - ra) * rfrac) >> 15);
+        }
+
         // Smooth speed changes (one-pole, about 12 ms) so TIME never zippers.
         // speed_smooth_ keeps 8 extra bits so small steps still arrive.
         speed_smooth_ += ((speed_target_ << 8) - speed_smooth_) >> 9;
@@ -481,6 +534,8 @@ private:
     int32_t phase_ = 0;        // 16.15 fixed point frame position
     int32_t speed_target_ = 0; // Q15
     int32_t speed_smooth_ = 0; // Q23 (Q15 with 8 extra bits)
+    int32_t spread_target_ = 0; // right head offset, phase units (frames << 15)
+    int32_t spread_smooth_ = 0;
     uint32_t passes_ = 0;
 
     int32_t loop_mix_ = 0; // Q15, 0 = input, 32768 = loop

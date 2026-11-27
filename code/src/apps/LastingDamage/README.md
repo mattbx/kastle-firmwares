@@ -23,6 +23,8 @@ Uses the FX Wizard panel's printed labels.
 | FEEDBACK MOD | How much the FEEDBACK CV moves the wear. |
 | AMOUNT | Dry/wet. Fully right is the loop only. |
 | SHIFT + AMOUNT | How much the AMOUNT CV moves the dry/wet. |
+| SHIFT + FEEDBACK (Filter) | Bastl's DJ filter on the loop, as on FX Wizard: lowpass to the left, highpass to the right, off in the middle. It only colours what you hear; the tape itself isn't filtered. |
+| SHIFT + FEEDBACK MOD (Stereo) | Stereo spread: the right channel is read by a second head up to 150 ms behind the first. The first half of the knob is a few ms (wider), the top end a short echo. Moving it bends the right channel's pitch for a moment, like sliding a tape head. |
 
 Everything else (input and output gain, tempo, LFO, rhythm, swing, settings)
 is Bastl's shared Kastle 2 layer, unchanged.
@@ -73,4 +75,5 @@ App ID 0x6F (see `lab/docs/app-ids.md`).
   (around -80 dB) when slowing down. Lo-fi on purpose, for now.
 - No settings are saved yet: after power-off the loop and the direction are
   gone (idea J in the plan covers committing a loop to flash).
-- SHIFT + FEEDBACK MOD (Stereo) and SHIFT + FEEDBACK (Filter) do nothing yet.
+- The filter runs on the same core as the tape. It fits on paper, but the audio
+  loop hasn't been timed on the device yet.

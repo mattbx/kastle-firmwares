@@ -82,10 +82,26 @@ void AppLastingDamage::Init()
          .initial_value = POT_MIN});
 
     // Shift layer
+    pots_[Pot::STEREO] = FancyPot::Create(
+        {.pot = Hardware::Pot::POT_2,
+         .layer = Hardware::Layer::SHIFT,
+         .initial_value = POT_MIN,
+         .freeze = true});
     pots_[Pot::AMOUNT_MOD] = FancyPot::Create(
         {.pot = Hardware::Pot::POT_4,
          .layer = Hardware::Layer::SHIFT,
          .initial_value = POT_MAX});
+    pots_[Pot::FILTER] = FancyPot::Create(
+        {.pot = Hardware::Pot::POT_6,
+         .layer = Hardware::Layer::SHIFT,
+         .initial_value = POT_HALF,
+         .deadzone = true});
+
+    // FX Wizard sets its DJ filter up the same way: no resonance.
+    filter_left_.Init(SAMPLE_RATE);
+    filter_right_.Init(SAMPLE_RATE);
+    filter_left_.SetResonance(0.0f, Svf::ForceValue::TRUE);
+    filter_right_.SetResonance(0.0f, Svf::ForceValue::TRUE);
 
     for (auto &pot : pots_)
     {
@@ -152,6 +168,7 @@ FASTCODE void AppLastingDamage::AudioLoop(q15_t *input, q15_t *output, size_t si
 
     tape_.SetSpeed(speed_q15_);
     tape_.SetWear(wear_q15_);
+    tape_.SetSpread(spread_frames_);
     const int32_t amount = amount_q15_;
     const uint32_t passes_before = tape_.GetPasses();
 
@@ -161,6 +178,11 @@ FASTCODE void AppLastingDamage::AudioLoop(q15_t *input, q15_t *output, size_t si
         int16_t dry_r = input[2 * i + 1];
         int16_t wet_l, wet_r;
         tape_.Process(dry_l, dry_r, &wet_l, &wet_r);
+        // DJ filter on the wet signal only, so the tape itself is never
+        // filtered. Its output is at half level (in every zone), so double
+        // it back, as FX Wizard does.
+        wet_l = static_cast<int16_t>(q15_saturate(filter_left_.Process(wet_l) * 2));
+        wet_r = static_cast<int16_t>(q15_saturate(filter_right_.Process(wet_r) * 2));
         // Dry/wet crossfade. (wet - dry) is at most 65535 and amount at most
         // 32768, so the product fits in 32 bits; amount 32768 is fully wet.
         output[2 * i] = static_cast<q15_t>(dry_l + (((wet_l - dry_l) * amount) >> 15));
@@ -228,6 +250,16 @@ void AppLastingDamage::UiLoop()
     amount += apply_pot_mod_attenuvert(Kastle2::hw.GetAnalogValue(CV_AMOUNT), pots_[Pot::AMOUNT_MOD]->GetValue());
     amount = constrain(amount, POT_MIN, POT_MAX);
     amount_q15_ = (amount >= POT_MAX) ? 32768 : amount * 8;
+
+    // FILTER: the DJ filter's crossfade. Float maths inside (the cutoff), so
+    // it's set here in the UI loop, as FX Wizard does.
+    q15_t filter = curve_map(pots_[Pot::FILTER]->GetValue(), kMapFilter);
+    filter_left_.SetCrossfade(filter);
+    filter_right_.SetCrossfade(filter);
+
+    // STEREO: right head offset, squared curve, 0-150 ms.
+    uint32_t stereo = static_cast<uint32_t>(pots_[Pot::STEREO]->GetValue());
+    spread_frames_ = (stereo * stereo / POT_MAX) * kMaxSpreadFrames / POT_MAX;
 
     UpdateLeds();
 }
