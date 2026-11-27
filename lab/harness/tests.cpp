@@ -296,8 +296,9 @@ int main()
     // 11. Flakes never click: DC 10000, flakes at their deepest (0.9) and
     //     back to back (a new one may start as soon as the last ends). One
     //     pass lays them down; the next pass plays them with wear off. The
-    //     steepest flake edge is depth*A / (len/2) = 0.9 * 10000 / 32 = 281
-    //     per frame, plus a step or two of dither: no step may exceed 290.
+    //     shortest flake is 128 frames, so the steepest edge is
+    //     depth*A / (len/2) = 0.9 * 10000 / 64 = 141 per frame, plus a step or
+    //     two of dither: no step may exceed 150.
     //     (Flakes from later passes can overlap earlier ones and be steeper;
     //     that's still a slope over milliseconds, not a click.)
     {
@@ -318,8 +319,8 @@ int main()
             min_level = std::min<int32_t>(min_level, o);
             prev = o;
         }
-        std::snprintf(d, sizeof d, "expected step <= 290 and some dips, got step %d, min %d", max_step, min_level);
-        Check(max_step <= 290 && min_level < 5000, "wear: flakes dip smoothly", d);
+        std::snprintf(d, sizeof d, "expected step <= 150 and some dips, got step %d, min %d", max_step, min_level);
+        Check(max_step <= 150 && min_level < 5000, "wear: flakes dip smoothly", d);
     }
 
     // 12. Seeded means repeatable: the same seed gives the same worn loop,
@@ -360,6 +361,26 @@ int main()
                       kCapacity - kSeam, static_cast<int>(r.loop.GetState()), r.loop.GetLength());
         Check(r.loop.GetState() == TapeLoop::State::LOOPING && r.loop.GetLength() == kCapacity - kSeam,
               "record: full buffer closes the loop", d);
+    }
+
+    // 15. Hiss floor: hiss amplitude A = 64 steps, white noise spread evenly
+    //     over +-A, variance A^2/3 = 1365.3. The hiss goes in before the level
+    //     loss, so each pass adds g^2 * 1365.3, plus the 1/4 of dither and
+    //     rounding after it. With keep g = 0.9 and no dulling the noise
+    //     settles at rms = sqrt((0.81 * 1365.3 + 0.25) / (1 - g^2)) = 76.3
+    //     steps. (Hiss added after the level loss would give 84.8; no hiss
+    //     at all settles at 1.15, test 9.)
+    {
+        Rig r;
+        const uint32_t L = 40000;
+        r.RecordLoop(L, [](uint32_t) { return int16_t(0); });
+        r.loop.SetWearParts(true, 58982, TapeLoop::kUnity, 0, 0, 64 * 256);
+        RunPasses(r, 80);
+        double g = 58982.0 / 65536.0;
+        double want = std::sqrt((g * g * 64.0 * 64 / 3 + 0.25) / (1 - g * g));
+        double got = Rms(r, 0, L);
+        std::snprintf(d, sizeof d, "expected %.1f +- 5%%, got %.1f", want, got);
+        Check(std::fabs(got - want) <= 0.05 * want, "hiss: settles at the known level", d);
     }
 
     std::printf("\n%s: %d failure(s)\n", g_failures ? "FAILED" : "ALL PASSED", g_failures);
