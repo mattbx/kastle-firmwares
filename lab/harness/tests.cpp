@@ -383,6 +383,42 @@ int main()
         Check(std::fabs(got - want) <= 0.05 * want, "hiss: settles at the known level", d);
     }
 
+    // 16. Spread: record L = signal, R = -signal. With the right head 441
+    //     frames behind (10 ms), wear off, 1x, R must equal -L from 441 frames
+    //     earlier, every frame. (Reading the wrong channel gives +L, out by
+    //     thousands; reading the wrong place gives a mismatch.) Spread 0 is
+    //     test 1.
+    {
+        Rig r;
+        const uint32_t L = 20011;
+        r.loop.Record();
+        for (uint32_t n = 0; r.loop.GetState() != TapeLoop::State::LOOPING; n++)
+        {
+            if (n == L) r.loop.Close();
+            int16_t s = TestSignal(n);
+            r.Frame(s, static_cast<int16_t>(-s));
+        }
+        r.loop.ForceSpread(441);
+        std::vector<int16_t> outl, outr;
+        for (uint32_t n = 0; n < 3 * L; n++)
+        {
+            int16_t a, b;
+            r.Frame(0, 0, &a, &b);
+            outl.push_back(a);
+            outr.push_back(b);
+        }
+        uint32_t bad = 0;
+        // Start once the output fade-in (kSeam frames) is behind L too.
+        for (uint32_t n = kSeam + 441; n < outl.size(); n++)
+        {
+            // +-1 allowed: the seam bake rounds halves up, so where -x lands
+            // on a half it rounds the other way from x (2 frames per loop).
+            if (std::abs(outr[n] + outl[n - 441]) > 1) bad++;
+        }
+        std::snprintf(d, sizeof d, "expected R[n] == -L[n-441] (+-1), %u of %zu differ", bad, outl.size() - kSeam - 441);
+        Check(bad == 0, "spread: right head reads 441 frames behind", d);
+    }
+
     std::printf("\n%s: %d failure(s)\n", g_failures ? "FAILED" : "ALL PASSED", g_failures);
     return g_failures ? 1 : 0;
 }

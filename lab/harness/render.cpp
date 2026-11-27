@@ -98,6 +98,11 @@ int main(int argc, char **argv)
              else if (t >= 20 && t < 30) speed = -1.0;                 // reverse
              l.SetSpeed(Q15(speed));
          }},
+        {"stereo", 30.0, [](TapeLoop &l, double t) {
+             l.SetWear(Q15(0.40));
+             // right head: 0 for 5 s, then glide out to 15 ms, then 120 ms
+             l.SetSpread(t < 5 ? 0 : (t < 15 ? 660 : 5280));
+         }},
     };
 
     for (const auto &s : scenarios)
