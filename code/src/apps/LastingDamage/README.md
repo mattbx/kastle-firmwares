@@ -19,7 +19,7 @@ Uses the FX Wizard panel's printed labels.
 | TRIG IN | Same as a MODE tap, so a clock or gate can record and close loops. |
 | TIME | Tape speed, half to double. 1x sits in the middle, with a small flat spot. |
 | TIME MOD | How much the FREE and STEP CVs move the speed. Middle = none, left inverts. |
-| FEEDBACK | Wear. Fully left: the loop repeats forever, bit for bit. Fully right: mostly gone in about 8 passes. |
+| FEEDBACK | Wear. Fully left: the loop repeats forever, bit for bit. Fully right: mostly gone in about 10 passes. |
 | FEEDBACK MOD | How much the FEEDBACK CV moves the wear. |
 | AMOUNT | Dry/wet. Fully right is the loop only. |
 | SHIFT + AMOUNT | How much the AMOUNT CV moves the dry/wet. |
@@ -44,10 +44,15 @@ that closes the loop by itself.
   on every pass.
 - The wear head rides on the play head and damages each frame it passes, once
   per pass, in either direction. Faster playback wears faster, like real tape.
-- Wear has four parts, all from the FEEDBACK knob: level loss (keep 1.0 down
-  to 0.75 per pass), dulling (a one-pole lowpass run along the tape), flakes
-  (up to one per 2000 frames, 1.5 to 25 ms long, 0.3 to 0.9 deep) and
-  re-rounding with TPDF dither. These numbers are first guesses to tune by ear.
+- Wear has five parts, all from the FEEDBACK knob. At full wear: level loss
+  (keep 0.85 per pass), dulling (a one-pole lowpass run along the tape),
+  flakes (one per 4000 frames, 3 to 49 ms long, a full dropout at the deepest),
+  fresh tape hiss each pass (white noise up to +-256 steps, darkened by the
+  dulling like the music), and re-rounding with TPDF dither.
+- The damage comes before the fade: at half wear the level drops only 0.16 dB
+  a pass, while the hiss builds and the flakes pile up. Level loss grows with
+  wear cubed, dulling, flakes and hiss with wear squared, so the bottom half of
+  the knob is gentle. Tuned once by ear (2026-11-27); still open to change.
 
 ## Build and flash
 

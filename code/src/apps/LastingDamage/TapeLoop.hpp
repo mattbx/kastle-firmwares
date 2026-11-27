@@ -34,10 +34,11 @@ SOFTWARE.
 // The idea in one paragraph: a real tape loop sheds oxide as it plays. Here
 // the "wear head" sits on the playback head, and every sample it passes is
 // written back slightly damaged: duller (a gentle lowpass along the tape),
-// a touch quieter, now and then hit by a "flake" (a short dip in level), and
-// re-rounded to 16 bits with a little noise (dither). Because the damage is
-// written back into the same buffer, it accumulates. After enough passes the
-// loop is a ghost in a bed of hiss. Wear at zero skips the write-back
+// a touch quieter, now and then hit by a "flake" (a short dip in level),
+// with a little fresh tape hiss on top, and re-rounded to 16 bits. Because
+// the damage is written back into the same buffer, it accumulates: each pass
+// is one more generation. After enough passes the loop is a ghost in a bed
+// of hiss. Wear at zero skips the write-back
 // entirely, so the loop then repeats bit for bit.
 //
 // Number formats (fixed point, because the RP2040 has no floating point unit):
@@ -158,14 +159,22 @@ public:
 
     /**
      * Wear amount in Q15: 0 = a perfect loop, 32767 = mostly gone in about
-     * 8 passes. Values under 256 count as zero so pot noise at the bottom of
+     * 10 passes. Values under 256 count as zero so pot noise at the bottom of
      * the knob can't start a slow wear.
      *
-     * Our first guesses, to tune by ear (all scale with wear squared, so the
-     * bottom half of the knob is gentle):
-     * - keep (level kept per pass): 1.0 down to 0.75
-     * - dull (one-pole coefficient along the tape): 1.0 (none) down to 0.4
-     * - flakes: up to one per 2000 frames passed, 0.3 to 0.9 deep
+     * Second tuning (2026-11-27, after the first listen on the device: at half
+     * wear the loop faded before the damage could be heard). The damage now
+     * comes first and the level loss last:
+     * - keep (level kept per pass): 1.0 down to 0.85, with wear cubed, so at
+     *   half wear it's 0.981 per pass (was 0.9375)
+     * - dull (one-pole coefficient along the tape): 1.0 (none) down to 0.4,
+     *   with wear squared (unchanged)
+     * - flakes: up to one per 4000 frames passed (was 2000), with wear
+     *   squared, but longer (3-49 ms, was 1.5-25 ms) and deeper: 0.45 up to
+     *   a full dropout (was 0.3 to 0.9). More frequent flakes turned into a
+     *   steady level loss rather than audible damage.
+     * - hiss: fresh white noise each pass, up to +-256 steps (was none, only
+     *   the +-1 step dither), with wear squared
      */
     void SetWear(int32_t wear_q15)
     {
@@ -178,23 +187,28 @@ public:
             wear_q15 = kUnity - 1;
         }
         int32_t w2 = (wear_q15 * wear_q15) >> 15;
+        int32_t w3 = (w2 * wear_q15) >> 15;
         SetWearParts(wear_q15 >= 256,
-                     65536 - ((w2 * 16384) >> 15),
-                     kUnity - ((w2 * 19661) >> 15),
-                     static_cast<uint32_t>((static_cast<uint64_t>(w2) * 2147483u) >> 15),
-                     9830 + ((wear_q15 * 19661) >> 15));
+                     65536 - ((w3 * 9830) >> 15),     // keep: 0.15 lost at most
+                     kUnity - ((w2 * 19661) >> 15),   // dull: 0.6 at most
+                     static_cast<uint32_t>((static_cast<uint64_t>(w2) * 1073741u) >> 15), // 2^32 / 4000
+                     14746 + ((wear_q15 * 18022) >> 15), // flake depth: 0.45 to 1.0
+                     w2 * 2);                            // hiss: 256 steps in Q8
     }
 
     /**
-     * The four kinds of wear set one by one. SetWear() maps the knob onto
+     * The five kinds of wear set one by one. SetWear() maps the knob onto
      * these; the tests call this directly so each kind can be checked alone.
      * @param on false skips the write-back entirely (bit-exact loop).
      * @param keep_q16 Level kept per pass, 65536 = 1.0.
      * @param dull_q15 One-pole coefficient along the tape, 32768 = no dulling.
      * @param flake_rate Chance per frame passed that a flake starts, out of 2^32.
      * @param flake_depth_q15 How deep a flake dips, 32768 = to silence.
+     * @param hiss_q8 Fresh hiss added per pass: white noise spread evenly over
+     *        +-hiss_q8 (in Q8, so 256 is one 16-bit step). 0 = no hiss.
      */
-    void SetWearParts(bool on, int32_t keep_q16, int32_t dull_q15, uint32_t flake_rate, int32_t flake_depth_q15)
+    void SetWearParts(bool on, int32_t keep_q16, int32_t dull_q15, uint32_t flake_rate, int32_t flake_depth_q15,
+                      int32_t hiss_q8 = 0)
     {
         if (on && !wear_on_)
         {
@@ -205,6 +219,7 @@ public:
         dull_q15_ = dull_q15;
         flake_rate_ = flake_rate;
         flake_depth_q15_ = flake_depth_q15;
+        hiss_q8_ = hiss_q8 < 0 ? 0 : (hiss_q8 > 65535 ? 65535 : hiss_q8);
     }
 
     /**
@@ -384,11 +399,11 @@ private:
     // One frame of wear, written back in place.
     LASTING_DAMAGE_FAST void Damage(int32_t i)
     {
-        // Flakes: now and then start a short dip in level (64-1087 frames,
-        // 1.5-25 ms), shaped as a triangle so it never clicks.
+        // Flakes: now and then start a short dip in level (128-2175 frames,
+        // 3-49 ms), shaped as a triangle so it never clicks.
         if (flake_left_ == 0 && wear_on_ && Random() < flake_rate_)
         {
-            flake_len_ = 64 + (Random() >> 22);
+            flake_len_ = 128 + (Random() >> 21);
             flake_left_ = flake_len_;
             flake_amt_ = flake_depth_q15_;
             flake_tri_ = 0;
@@ -412,13 +427,26 @@ private:
         // the finishing flake applies.
         const int32_t keep = wear_on_ ? keep_q16_ : 65536;
         const int32_t dull = wear_on_ ? dull_q15_ : kUnity;
+        const int32_t hiss_amp = wear_on_ ? hiss_q8_ : 0;
         int32_t gain_q16 = static_cast<int32_t>((static_cast<int64_t>(keep) * flake_gain) >> 15);
 
         uint32_t dither = Random();
+        uint32_t noise = hiss_amp > 0 ? Random() : 0;
         const uint32_t base = 2u * static_cast<uint32_t>(i);
         for (uint32_t ch = 0; ch < 2; ch++)
         {
             int32_t x = static_cast<int32_t>(buf_[base + ch]) * 256; // Q8
+            // Hiss: one generation's worth of fresh white noise, spread evenly
+            // over +-hiss_amp. It goes in before the dulling, so like the
+            // music it darkens pass by pass, and the old hiss builds into a
+            // dark bed under the bright new layer, as on a tape copied from
+            // copy to copy. (r - 32768) is at most 32768 and hiss_amp at most
+            // 65535, so the product fits in 32 bits.
+            if (hiss_amp > 0)
+            {
+                int32_t r = static_cast<int32_t>((noise >> (16 * ch)) & 0xFFFFu) - 32768;
+                x += (r * hiss_amp) >> 15;
+            }
             if (reset_prev_)
             {
                 prev_[ch] = x;
@@ -464,6 +492,7 @@ private:
     int32_t dull_q15_ = kUnity;
     uint32_t flake_rate_ = 0;
     int32_t flake_depth_q15_ = 0;
+    int32_t hiss_q8_ = 0;
     int32_t wear_idx_ = 0;
     int32_t prev_[2] = {0, 0}; // dulling filter state, Q8
 
