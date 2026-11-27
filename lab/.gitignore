@@ -1,0 +1,3 @@
+renders/*
+!renders/README.md
+harness/build/
